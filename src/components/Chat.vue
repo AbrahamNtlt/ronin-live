@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { io } from 'socket.io-client';
-import { ref } from 'vue';
+import { NSelect, NFlex, NButton, NInput } from 'naive-ui';
+import { onMounted, ref, shallowRef } from 'vue';
+import { getLocalDevices, getLocalDisplayMedia, getLocalUserMedia } from '../common/localMedia.ts';
 
 const socket = io('http://127.0.0.1:8080/');
 const calleeId = ref('');
@@ -11,6 +13,7 @@ const remoteVideo = ref<HTMLVideoElement>();
 
 const id = Math.random().toString(36).substr(2, 9);
 let remoteId: string;
+
 socket.on('connect', () => {
   console.log('Connected to server');
   socket.emit('join', {
@@ -120,7 +123,14 @@ function pcListener(pc: RTCPeerConnection) {
 
 
 const openCamera = () => {
-  navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+  getLocalUserMedia({
+    video: videoIpt.value ? {
+      deviceId: videoIpt.value,
+    } : true,
+    audio: audioIpt.value ? {
+      deviceId: audioIpt.value,
+    } : true,
+  })
     .then((stream) => {
       localVideo.value!.srcObject = localStream = stream;
       for (const track of localStream.getTracks()) {
@@ -133,7 +143,7 @@ const openCamera = () => {
 };
 
 const openDesktop = () => {
-  navigator.mediaDevices.getDisplayMedia({ video: true, audio: true }).then((stream) => {
+  getLocalDisplayMedia({ video: true, audio: true }).then((stream) => {
     localVideo.value!.srcObject = localStream = stream;
     for (const track of localStream.getTracks()) {
       pc.addTrack(track, localStream);
@@ -154,12 +164,108 @@ const sendMsg = () => {
     console.log('sendMsg res', res);
   });
 };
+
+
+const audioIpt = ref(null);
+const videoIpt = ref(null);
+const audioOpt = ref(null);
+
+
+const localDevices = shallowRef<{
+  audioInputs: MediaDeviceInfo[],
+  videoInputs: MediaDeviceInfo[],
+  audioOutputs: MediaDeviceInfo[]
+}>({ audioInputs: [], videoInputs: [], audioOutputs: [] });
+
+onMounted(async () => {
+  getLocalDevices().then(devices => {
+    localDevices.value = devices;
+  });
+});
+const closeVideo = () => {
+  const videoTracks = localVideo.value!.srcObject!.getTracks();
+  videoTracks.forEach(track => {
+    track.stop();
+  });
+};
+
+const changeAudio = () => {
+  // const audioTracks = localVideo.value!.srcObject!.getTracks();
+  const senders = pc.getSenders();
+  const sender = senders.find(s => s.track!.kind === 'video');
+  if (sender) {
+    sender.track!.enabled = !sender.track!.enabled;
+  }
+};
+
+const changeCamera = async () => {
+  const senders = pc.getSenders();
+  const sender = senders.find(s => s.track!.kind === 'video');
+  if (sender) {
+    console.log('sender', sender);
+    const newVideoStream = await getLocalUserMedia({
+      video: videoIpt.value ? {
+        deviceId: videoIpt.value,
+      } : true,
+      audio: false,
+    });
+    const newLocalStream = new MediaStream();
+    const [videoTrack] = newVideoStream.getTracks();
+    newLocalStream.addTrack(videoTrack);
+    localStream.getTracks().forEach(track => {
+      if (track.kind === 'video') {
+        track.stop();
+      } else {
+        newLocalStream.addTrack(track);
+      }
+    });
+    localVideo.value!.srcObject = localStream = newLocalStream;
+    await sender.replaceTrack(videoTrack);
+  }
+};
+
+const text = ref<string>('');
+
+let channel;
+const sendChannel = () => {
+  channel.send(text.value);
+  text.value = '';
+};
+
+
+function initChannel() {
+  if (channel) return;
+  channel = pc.createDataChannel('chat');
+  pc.ondatachannel = (evt) => {
+    evt.channel.onopen = () => {
+
+    };
+    evt.channel.onmessage = (msg) => {
+      console.log(msg);
+    };
+    evt.channel.onclose = () => {
+
+    };
+  };
+}
+
+onMounted(initChannel);
 </script>
 
 <template>
+  <n-flex justify="center">
+    <n-select v-model:value="videoIpt" :options="localDevices.videoInputs" value-field="deviceId" />
+    <n-select v-model:value="audioIpt" :options="localDevices.audioInputs" value-field="deviceId" />
+    <n-select v-model:value="audioOpt" :options="localDevices.audioOutputs" value-field="deviceId" />
+  </n-flex>
+  <n-button @click="closeVideo">关闭视频</n-button>
+  <n-button @click="changeAudio">切换音视频模式</n-button>
+  <n-button @click="changeCamera">切换摄像头</n-button>
+
+
   <div>userId: {{ id }}</div>
   <input v-model="calleeId">
-  <button @click="clickBtn">sendCall</button>
+  <n-button @click="clickBtn">sendCall</n-button>
   <table>
     <tr>
       <th>localVideo</th>
@@ -179,6 +285,9 @@ const sendMsg = () => {
       </td>
     </tr>
   </table>
+
+  <n-input v-model:value="text" type="text" placeholder="发送文本" clearable />
+  <n-button @click="sendChannel">发送文本</n-button>
 </template>
 
 <style scoped>
